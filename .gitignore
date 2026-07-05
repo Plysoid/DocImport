@@ -1,30 +1,31 @@
 # Python
 __pycache__/
 *.pyc
-.venv/
+
+# Virtual environment
 venv/
-env/
+.venv/
 
-# Logs / temp
-*.log
-*.tmp
-*.bak
-*.old
-
-# OCR / test data
-input/
-output/
-data/
+# Build
+build/
 dist/
+*.spec
+
+# Logs
 logs/
-rawdict.json
-*.dbf
-*.xlsx
 
-# IDE
-.vscode/
-.idea/
+# Runtime data
+data/
 
-# OS
-Thumbs.db
-desktop.ini
+# OCR output
+output/
+input/
+
+# PyInstaller
+*.toc
+*.pkg
+*.pyz
+*.manifest
+warn-*.txt
+xref-*.html
+base_library.zip

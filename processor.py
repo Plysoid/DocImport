@@ -1,6 +1,7 @@
 from pathlib import Path
 from catalogs.products import ProductCatalog
 from catalogs.shops import ShopCatalog
+from catalogs.price_history import PriceHistory
 from ocr.reader import OCRReader
 from parser.cocacola import CocaColaParser
 from exporters.excel_exporter import ExcelExporter
@@ -15,6 +16,7 @@ class Processor:
         self.log = log
         self.products = ProductCatalog()
         self.shops = ShopCatalog()
+        self.price_history = PriceHistory(Path("data") / "price_history.xlsx")
         self.ocr = OCRReader(settings)
         self.parser = CocaColaParser()
 
@@ -34,8 +36,10 @@ class Processor:
         CorrectionExporter().ensure_templates(Path(self.settings.products_file).parent)
         self.products.load(self.settings.products_file)
         self.shops.load(self.settings.shops_file)
+        self.price_history.load()
         self.log(f"Товарів у довіднику: {len(self.products.items)}")
         self.log(f"Магазинів у довіднику: {len(self.shops.items)}")
+        self.log(f"Історичних цін: {len(self.price_history.prices)}")
         invoices = []
         for f in self.files():
             self.log(f"Обробка: {f.name}")
@@ -60,7 +64,9 @@ class Processor:
                     it.match_method = method
                 invoices.append(inv)
                 self.log(f"  стор. {pg['page']}: DOC={inv.doc}; SHOP={(shop.code if shop else '')}; рядків={len(inv.items)}")
-        InvoiceValidator().validate(invoices, self._add_match_flags)
+        InvoiceValidator(self.price_history).validate(invoices, self._add_match_flags)
+        confirmed_prices = InvoiceValidator.confirmed_prices_for_history(invoices)
+        self.price_history.update(confirmed_prices)
         out = Path(self.settings.output_dir)
         ExcelExporter().export(invoices, out / "result.xlsx")
         DBFExporter().export(invoices, out / "result.dbf")
