@@ -1,5 +1,13 @@
 # CHANGELOG
 
+
+## 4.1.0-beta1
+
+- Додано frozen PriceIndex для підтверджених цін поточного пакета.
+- Винесено побудову пакетних цін із InvoiceValidator.
+- Пріоритет цін: package-confirmed price > LASTPRICE.
+- Зменшено ризик повторного запуску для виправлення OCR-цін.
+
 ## 4.0.1-beta1
 
 - Додано контроль LASTPRICE через data/price_history.xlsx.
