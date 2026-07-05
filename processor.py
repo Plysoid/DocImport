@@ -8,6 +8,7 @@ from exporters.excel_exporter import ExcelExporter
 from exporters.dbf_exporter import DBFExporter
 from exporters.correction_exporter import CorrectionExporter
 from validators.invoice_validator import InvoiceValidator
+from validators.price_index import PriceIndex
 
 
 class Processor:
@@ -64,9 +65,10 @@ class Processor:
                     it.match_method = method
                 invoices.append(inv)
                 self.log(f"  стор. {pg['page']}: DOC={inv.doc}; SHOP={(shop.code if shop else '')}; рядків={len(inv.items)}")
-        InvoiceValidator(self.price_history).validate(invoices, self._add_match_flags)
-        confirmed_prices = InvoiceValidator.confirmed_prices_for_history(invoices)
-        self.price_history.update(confirmed_prices)
+        price_index = PriceIndex(invoices, self.price_history)
+        self.log(f"Підтверджених цін пакета: {len(price_index.package_prices)}")
+        InvoiceValidator(price_index=price_index).validate(invoices, self._add_match_flags)
+        self.price_history.update(price_index.confirmed_prices())
         out = Path(self.settings.output_dir)
         ExcelExporter().export(invoices, out / "result.xlsx")
         DBFExporter().export(invoices, out / "result.dbf")

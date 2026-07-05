@@ -1,9 +1,15 @@
 from collections import defaultdict
+from validators.price_index import PriceIndex
 
 
 class InvoiceValidator:
-    def __init__(self, price_history=None, max_history_deviation=0.20):
-        self.price_history = price_history
+    def __init__(self, price_index=None, price_history=None, max_history_deviation=0.20):
+        # Зворотна сумісність: старий виклик був InvoiceValidator(price_history).
+        if price_history is None and price_index is not None and hasattr(price_index, "prices") and not hasattr(price_index, "package_prices"):
+            price_history = price_index
+            price_index = None
+        self.price_index = price_index
+        self.price_history = price_history or getattr(price_index, "price_history", None)
         self.max_history_deviation = max_history_deviation
 
     """Двопрохідна перевірка після OCR.
@@ -21,19 +27,23 @@ class InvoiceValidator:
             if not hasattr(inv, "fixes"):
                 inv.fixes = []
 
-        typical = self._typical_prices_from_good_rows(invoices)
+        # PriceIndex будується один раз і далі не змінюється під час валідації.
+        # Це прибирає залежність від другого запуску програми.
+        if self.price_index is None:
+            self.price_index = PriceIndex(invoices, self.price_history)
 
-        # 1. Локальні безпечні виправлення з типовими цінами пакета.
+        typical = dict(getattr(self.price_index, "package_prices", {}) or {})
+
+        # 1. Локальні безпечні виправлення з підтвердженими цінами пакета.
         self._apply_package_price_control(invoices, typical)
 
-        # 2. Контроль відхилення від останньої підтвердженої ціни.
+        # 2. Контроль відхилення: confirmed package price > LASTPRICE.
         self._apply_history_price_control(invoices, typical)
 
         # 3. Контроль підсумків документа: Σ(QTY), Σ(SUM).
         self._apply_document_totals_control(invoices, typical)
 
-        # 4. Повторний контроль після виправлень.
-        typical = self._typical_prices_from_good_rows(invoices)
+        # 4. Повторний контроль після виправлень, але з тим самим замороженим PriceIndex.
         self._apply_package_price_control(invoices, typical)
         self._apply_history_price_control(invoices, typical)
         self._apply_document_totals_control(invoices, typical)
@@ -198,9 +208,10 @@ class InvoiceValidator:
 
 
     def _history_ref(self, item, typical):
-        # Пріоритет: підтверджена ціна поточного пакета, потім LASTPRICE.
-        # Це дозволяє виправляти помилки вже з першого запуску, ще до
-        # запису/оновлення data\price_history.xlsx.
+        # Пріоритет: заморожений PriceIndex, потім fallback на typical/price_history.
+        if self.price_index is not None:
+            return self.price_index.get(item)
+
         key = self._key(item)
         if key in typical:
             return typical[key]
@@ -211,6 +222,14 @@ class InvoiceValidator:
             return None
         code = str(getattr(item.product, "code", "") or "").strip()
         return self.price_history.get(code)
+
+    def _ref_source(self, item, typical):
+        if self.price_index is not None:
+            return self.price_index.source(item)
+        key = self._key(item)
+        if key in typical:
+            return "package"
+        return "history"
 
     def _price_deviation(self, price, ref):
         try:
@@ -223,18 +242,16 @@ class InvoiceValidator:
             return 0.0
 
     def _apply_history_price_control(self, invoices, typical):
-        # Пакетна підтверджена ціна має працювати навіть тоді,
-        # коли data/price_history.xlsx ще порожній або відсутній.
-        has_typical = bool(typical)
-        has_history = bool(self.price_history and getattr(self.price_history, "prices", None))
-        if not has_typical and not has_history:
-            return
-
         for inv in invoices:
             for it in inv.items:
                 ref = self._history_ref(it, typical)
                 if not ref:
                     continue
+                source = self._ref_source(it, typical)
+                price_flag = "pricefix-pack" if source == "package" else "pricefix-history"
+                amount_flag = "amountfix-pack" if source == "package" else "amountfix-history"
+                warn_flag = "pricewarn-pack" if source == "package" else "pricewarn-history"
+                reason = "confirmed package price" if source == "package" else "last confirmed price"
 
                 price = self._round2(it.price)
                 qty = float(it.qty or 0)
@@ -256,23 +273,23 @@ class InvoiceValidator:
                     old_amount = amount
                     it.price = ref
                     it.amount = expected
-                    self._flag(it, "pricefix-history")
-                    self._flag(it, "amountfix-history")
-                    self._record(inv, it, "CINABPDV", old_price, it.price, "last confirmed price")
-                    self._record(inv, it, "SUMBPDV", old_amount, it.amount, "last confirmed price")
+                    self._flag(it, price_flag)
+                    self._flag(it, amount_flag)
+                    self._record(inv, it, "CINABPDV", old_price, it.price, reason)
+                    self._record(inv, it, "SUMBPDV", old_amount, it.amount, reason)
                     continue
 
                 # Якщо сума вже відповідає історичній ціні — виправляємо тільки ціну.
                 if self._amount_ok(ref, qty, amount):
                     old = price
                     it.price = ref
-                    self._flag(it, "pricefix-history")
-                    self._record(inv, it, "CINABPDV", old, it.price, "last confirmed price")
+                    self._flag(it, price_flag)
+                    self._record(inv, it, "CINABPDV", old, it.price, reason)
                     continue
 
                 # Якщо поточна ціна дає рядкову суму, але відхилення від історії надто велике,
                 # не чіпаємо автоматично, а маркуємо для перевірки.
-                self._flag(it, "pricewarn-history")
+                self._flag(it, warn_flag)
 
     def _apply_document_totals_control(self, invoices, typical):
         for inv in invoices:
@@ -380,30 +397,8 @@ class InvoiceValidator:
 
     @staticmethod
     def confirmed_prices_for_history(invoices):
-        """Повертає ITEM -> LASTPRICE, якщо ціна підтвердилась у >=2 різних накладних.
-
-        Беремо тільки математично коректні рядки після всіх виправлень.
-        """
-        groups = defaultdict(set)
-        helper = InvoiceValidator()
-        for inv in invoices:
-            doc = str(getattr(inv, "doc", "") or getattr(inv, "source_file", "") or "")
-            for it in getattr(inv, "items", []):
-                product = getattr(it, "product", None)
-                code = str(getattr(product, "code", "") or "").strip()
-                if not code:
-                    continue
-                price = helper._round2(getattr(it, "price", 0))
-                qty = float(getattr(it, "qty", 0) or 0)
-                amount = helper._round2(getattr(it, "amount", 0))
-                if price > 0 and qty > 0 and amount > 0 and helper._amount_ok(price, qty, amount):
-                    groups[(code, price)].add(doc)
-
-        confirmed = {}
-        for (code, price), docs in groups.items():
-            if len(docs) >= 2:
-                confirmed[code] = price
-        return confirmed
+        """Зворотна сумісність: тепер це робить PriceIndex."""
+        return PriceIndex(invoices).confirmed_prices()
 
     def _final_warnings(self, invoices):
         for inv in invoices:
