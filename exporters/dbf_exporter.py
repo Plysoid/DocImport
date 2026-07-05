@@ -7,7 +7,7 @@ class DBFExporter:
     SPEC = (
         "DOC C(20); DATE D; SHOP C(3); ADDRESS C(50); ADDRNAKL C(100); "
         "ITEM C(8); ITEMNAME C(50); ITEMNAKL C(50); ITEMSHK C(13); "
-        "QTY N(10,3); ODVYM C(10); CINABPDV N(18,3); SUMBPDV N(18,3); MATCH C(50)"
+        "QTY N(10,3); ODVYM C(10); CINABPDV N(18,3); SUMBPDV N(18,3); DOCSUM N(18,2); MATCH C(50)"
     )
 
     def export(self, invoices, filename):
@@ -36,6 +36,7 @@ class DBFExporter:
                         (it.unit or "ЯЩ")[:10],
                         float(it.price or 0),
                         float(it.amount or 0),
+                        round(float(getattr(inv, "doc_sum", 0) or 0), 2),
                         (it.match_method or "")[:50],
                     ))
         finally:
