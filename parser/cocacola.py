@@ -385,11 +385,6 @@ class CocaColaParser:
         if qty >= 10 and self._amount_ok(price, 1, amount):
             return price, 1.0, amount, "qtyfix"
 
-        # Якщо з суми та кількості виходить нормальна ціна — відновлюємо її.
-        derived_price = round(amount / qty, 2) if qty else 0
-        if self._looks_price(derived_price) and self._amount_ok(derived_price, qty, amount):
-            return derived_price, qty, amount, "pricefix"
-
         # Якщо ціна і сума дають цілу кількість — виправляємо кількість.
         computed_qty = round(amount / price) if price else 0
         if self._looks_qty(computed_qty) and self._amount_ok(price, computed_qty, amount):

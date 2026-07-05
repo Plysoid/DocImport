@@ -215,15 +215,6 @@ class InvoiceValidator:
                         changed = True
                         break
 
-                    # 1B. Якщо заміна суми закриває суму документа.
-                    if doc_sum and abs((sum_total - amount + expected) - doc_sum) <= 0.10:
-                        old = amount
-                        it.amount = expected
-                        self._flag(it, "amountfix-docsum")
-                        self._record(inv, it, "SUMBPDV", old, it.amount, "document sum")
-                        changed = True
-                        break
-
                     # 1C. Якщо кількість склеїлась і це підтверджується рядком/документом.
                     for q in self._candidate_qtys(qty):
                         if not self._amount_ok(price, q, amount):
