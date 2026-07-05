@@ -14,6 +14,9 @@ env/
 # OCR / test data
 input/
 output/
+data/
+dist/
+log/
 rawdict.json
 *.dbf
 *.xlsx
