@@ -2,6 +2,10 @@ from collections import Counter, defaultdict
 
 
 class InvoiceValidator:
+    def __init__(self, price_history=None, max_history_deviation=0.20):
+        self.price_history = price_history
+        self.max_history_deviation = max_history_deviation
+
     """Двопрохідна перевірка після OCR.
 
     Принципи:
@@ -22,15 +26,19 @@ class InvoiceValidator:
         # 1. Локальні безпечні виправлення з типовими цінами пакета.
         self._apply_package_price_control(invoices, typical)
 
-        # 2. Контроль підсумків документа: Σ(QTY), Σ(SUM).
+        # 2. Контроль відхилення від останньої підтвердженої ціни.
+        self._apply_history_price_control(invoices, typical)
+
+        # 3. Контроль підсумків документа: Σ(QTY), Σ(SUM).
         self._apply_document_totals_control(invoices, typical)
 
-        # 3. Повторний контроль після виправлень.
+        # 4. Повторний контроль після виправлень.
         typical = self._typical_prices_from_good_rows(invoices)
         self._apply_package_price_control(invoices, typical)
+        self._apply_history_price_control(invoices, typical)
         self._apply_document_totals_control(invoices, typical)
 
-        # 4. Фінальне маркування попереджень.
+        # 5. Фінальне маркування попереджень.
         self._final_warnings(invoices)
         return invoices
 
@@ -178,6 +186,77 @@ class InvoiceValidator:
 
     # ------------------------------------------------------------
 
+
+    def _history_ref(self, item, typical):
+        # Історію НЕ вимикаємо лише через наявність типової ціни пакета.
+        # OCR-рядок 985,32 | 1 | 985,32 математично коректний і може сам
+        # створити фальшиву "типову" ціну. Тому історія використовується
+        # як контроль відхилення > max_history_deviation.
+        if not self.price_history or not getattr(self.price_history, "prices", None):
+            return None
+        if not item.product:
+            return None
+        code = str(getattr(item.product, "code", "") or "").strip()
+        return self.price_history.get(code)
+
+    def _price_deviation(self, price, ref):
+        try:
+            price = float(price or 0)
+            ref = float(ref or 0)
+            if price <= 0 or ref <= 0:
+                return 0.0
+            return abs(price - ref) / ref
+        except Exception:
+            return 0.0
+
+    def _apply_history_price_control(self, invoices, typical):
+        if not self.price_history or not getattr(self.price_history, "prices", None):
+            return
+
+        for inv in invoices:
+            for it in inv.items:
+                ref = self._history_ref(it, typical)
+                if not ref:
+                    continue
+
+                price = self._round2(it.price)
+                qty = float(it.qty or 0)
+                amount = self._round2(it.amount)
+                if not price or not qty or not amount:
+                    continue
+
+                deviation = self._price_deviation(price, ref)
+                if deviation <= self.max_history_deviation:
+                    continue
+
+                expected = round(ref * qty, 2)
+
+                # Найбезпечніший OCR-випадок: qty=1, price==amount, але обидва
+                # далеко відлетіли від останньої підтвердженої ціни.
+                # Приклад: 985,32 | 1 | 985,32, історична 385,32.
+                if qty == 1 and abs(price - amount) <= 0.01:
+                    old_price = price
+                    old_amount = amount
+                    it.price = ref
+                    it.amount = expected
+                    self._flag(it, "pricefix-history")
+                    self._flag(it, "amountfix-history")
+                    self._record(inv, it, "CINABPDV", old_price, it.price, "last confirmed price")
+                    self._record(inv, it, "SUMBPDV", old_amount, it.amount, "last confirmed price")
+                    continue
+
+                # Якщо сума вже відповідає історичній ціні — виправляємо тільки ціну.
+                if self._amount_ok(ref, qty, amount):
+                    old = price
+                    it.price = ref
+                    self._flag(it, "pricefix-history")
+                    self._record(inv, it, "CINABPDV", old, it.price, "last confirmed price")
+                    continue
+
+                # Якщо поточна ціна дає рядкову суму, але відхилення від історії надто велике,
+                # не чіпаємо автоматично, а маркуємо для перевірки.
+                self._flag(it, "pricewarn-history")
+
     def _apply_document_totals_control(self, invoices, typical):
         for inv in invoices:
             if not inv.items:
@@ -230,18 +309,6 @@ class InvoiceValidator:
                     if changed:
                         break
 
-                    # 1D. Виводити ціну із amount/qty можна тільки якщо підсумок
-                    # документа вже підтверджує суму. Інакше це породжує 494,38 з 988,76/2.
-                    if doc_sum and abs(sum_total - doc_sum) <= 0.10 and qty:
-                        derived = round(amount / qty, 2)
-                        if 10 <= derived <= 5000 and abs(derived - price) > 0.01:
-                            old = price
-                            it.price = derived
-                            self._flag(it, "pricefix-docsum")
-                            self._record(inv, it, "CINABPDV", old, it.price, "document sum confirms amount")
-                            changed = True
-                            break
-
                 if changed:
                     continue
 
@@ -293,6 +360,33 @@ class InvoiceValidator:
                     break
 
     # ------------------------------------------------------------
+
+    @staticmethod
+    def confirmed_prices_for_history(invoices):
+        """Повертає ITEM -> LASTPRICE, якщо ціна підтвердилась у >=2 різних накладних.
+
+        Беремо тільки математично коректні рядки після всіх виправлень.
+        """
+        groups = defaultdict(set)
+        helper = InvoiceValidator()
+        for inv in invoices:
+            doc = str(getattr(inv, "doc", "") or getattr(inv, "source_file", "") or "")
+            for it in getattr(inv, "items", []):
+                product = getattr(it, "product", None)
+                code = str(getattr(product, "code", "") or "").strip()
+                if not code:
+                    continue
+                price = helper._round2(getattr(it, "price", 0))
+                qty = float(getattr(it, "qty", 0) or 0)
+                amount = helper._round2(getattr(it, "amount", 0))
+                if price > 0 and qty > 0 and amount > 0 and helper._amount_ok(price, qty, amount):
+                    groups[(code, price)].add(doc)
+
+        confirmed = {}
+        for (code, price), docs in groups.items():
+            if len(docs) >= 2:
+                confirmed[code] = price
+        return confirmed
 
     def _final_warnings(self, invoices):
         for inv in invoices:
