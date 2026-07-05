@@ -1,4 +1,4 @@
-from collections import Counter, defaultdict
+from collections import defaultdict
 
 
 class InvoiceValidator:
@@ -107,8 +107,21 @@ class InvoiceValidator:
     # ------------------------------------------------------------
 
     def _typical_prices_from_good_rows(self, invoices):
-        groups = defaultdict(list)
+        """Підтверджені ціни поточного пакета.
+
+        Ціна стає типовою тільки якщо одна й та сама ціна для одного товару
+        зустрілась у двох різних накладних і рядки математично коректні.
+
+        Важливо: один математично коректний рядок 985,32 * 1 = 985,32
+        НЕ має права сам створити типову ціну пакета.
+        """
+        groups = defaultdict(set)
+
         for inv in invoices:
+            doc = str(getattr(inv, "doc", "") or getattr(inv, "source_file", "") or "")
+            if not doc:
+                doc = str(id(inv))
+
             for it in inv.items:
                 key = self._key(it)
                 if not key:
@@ -116,18 +129,15 @@ class InvoiceValidator:
                 price = self._round2(it.price)
                 qty = float(it.qty or 0)
                 amount = self._round2(it.amount)
-                # Типову ціну будуємо тільки з рядків, де price*qty=sum.
-                # Це не дає помилковій сумі 988,76 породити хибну ціну 494,38.
+
+                # Типову ціну будуємо тільки з рядків, де price*qty=sum,
+                # і тільки якщо ця ціна підтвердилась у >=2 різних накладних.
                 if price > 0 and qty > 0 and amount > 0 and qty < 100 and self._amount_ok(price, qty, amount):
-                    groups[key].append(price)
+                    groups[(key, price)].add(doc)
 
         typical = {}
-        for key, prices in groups.items():
-            if not prices:
-                continue
-            c = Counter(prices)
-            price, freq = c.most_common(1)[0]
-            if freq >= 2 or len(c) == 1:
+        for (key, price), docs in groups.items():
+            if len(docs) >= 2:
                 typical[key] = price
         return typical
 
@@ -188,10 +198,13 @@ class InvoiceValidator:
 
 
     def _history_ref(self, item, typical):
-        # Історію НЕ вимикаємо лише через наявність типової ціни пакета.
-        # OCR-рядок 985,32 | 1 | 985,32 математично коректний і може сам
-        # створити фальшиву "типову" ціну. Тому історія використовується
-        # як контроль відхилення > max_history_deviation.
+        # Пріоритет: підтверджена ціна поточного пакета, потім LASTPRICE.
+        # Це дозволяє виправляти помилки вже з першого запуску, ще до
+        # запису/оновлення data\price_history.xlsx.
+        key = self._key(item)
+        if key in typical:
+            return typical[key]
+
         if not self.price_history or not getattr(self.price_history, "prices", None):
             return None
         if not item.product:
@@ -210,7 +223,11 @@ class InvoiceValidator:
             return 0.0
 
     def _apply_history_price_control(self, invoices, typical):
-        if not self.price_history or not getattr(self.price_history, "prices", None):
+        # Пакетна підтверджена ціна має працювати навіть тоді,
+        # коли data/price_history.xlsx ще порожній або відсутній.
+        has_typical = bool(typical)
+        has_history = bool(self.price_history and getattr(self.price_history, "prices", None))
+        if not has_typical and not has_history:
             return
 
         for inv in invoices:
