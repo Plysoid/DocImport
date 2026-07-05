@@ -5,13 +5,14 @@ from PySide6.QtWidgets import (
     QTableWidgetItem, QHBoxLayout
 )
 from processor import Processor
+from utils.app import APP_NAME, APP_VERSION
 
 
 class MainWindow(QMainWindow):
     def __init__(self, settings):
         super().__init__()
         self.settings = settings
-        self.setWindowTitle("DocImport v3.3.1")
+        self.setWindowTitle(f"{APP_NAME} v{APP_VERSION}")
         self.resize(1100, 720)
         root = QWidget()
         self.setCentralWidget(root)

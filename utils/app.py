@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 APP_NAME = "DocImport"
-APP_VERSION = "3.3.0"
+APP_VERSION = "4.0.0-dev"
 
 
 def app_dir() -> Path:
