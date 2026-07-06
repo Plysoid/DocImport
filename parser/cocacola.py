@@ -310,7 +310,7 @@ class CocaColaParser:
 
     def _number_tokens(self, s):
         tokens = re.findall(
-            r"\d{1,3}(?:\.\d{3})*,\d{2}|\d+\.\d{2}|\d+,\d{2}|\b\d+\b",
+            r"\d{1,3}\.\d{4,6}|\d{1,3}(?:\.\d{3})*,\d{2}|\d+\.\d{2}|\d+,\d{2}|\b\d+\b",
             s or ""
         )
         vals = []
@@ -332,6 +332,12 @@ class CocaColaParser:
         if "," in s:
             return to_float(s)
 
+        # OCR-випадок: 1.21590 -> 1215.90
+        # крапка як розділювач тисяч, але кома перед копійками втрачена
+        if re.fullmatch(r"\d{1,3}\.\d{4,6}", s):
+            compact = s.replace(".", "")
+            return float(compact[:-2] + "." + compact[-2:])
+            
         # Крапка як десятковий розділювач: 385.32 -> 385.32.
         # Важливо: старий to_float видаляв крапку і робив 38532.
         if re.fullmatch(r"\d+\.\d{2}", s):
