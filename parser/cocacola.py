@@ -375,10 +375,9 @@ class CocaColaParser:
         if not price or not qty or not amount:
             return price, qty, amount, ""
 
-        # Типовий випадок: ціна OCR помилкова, а сума і кількість правильні.
-        # 985,32 | 1 | 385,32 -> price = 385,32, amount = 385,32.
-        if qty == 1 and self._looks_price(amount):
-            return round(amount, 2), qty, round(amount, 2), "pricefix"
+        # Не виправляємо price = amount при qty == 1 на рівні парсера.
+        # Приклад 385,32 | 1 | 985,32: правильна ціна вже є, а помилкова саме сума.
+        # Такі рішення має приймати validator з урахуванням DOCSUM / PriceIndex / history.
 
         # Якщо кількість склеїлась з першою цифрою суми: 14 257,64,
         # а price * 1 = amount, не перетворюємо це на ціну 18,40.

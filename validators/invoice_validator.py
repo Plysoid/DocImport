@@ -243,6 +243,9 @@ class InvoiceValidator:
 
     def _apply_history_price_control(self, invoices, typical):
         for inv in invoices:
+            doc_sum = self._round2(getattr(inv, "doc_sum", 0))
+            sum_total = self._round2(sum(float(x.amount or 0) for x in inv.items))
+
             for it in inv.items:
                 ref = self._history_ref(it, typical)
                 if not ref:
@@ -257,6 +260,22 @@ class InvoiceValidator:
                 qty = float(it.qty or 0)
                 amount = self._round2(it.amount)
                 if not price or not qty or not amount:
+                    continue
+
+                # Якщо поточна ціна і кількість виглядають надійно,
+                # а помилкова лише сума, і заміна SUM на price*qty закриває DOCSUM,
+                # історична ціна не має права перетирати поточну ціну.
+                # Приклад: 385,32 | 1 | 985,32, history=362,52 -> SUM=385,32.
+                current_expected = round(price * qty, 2)
+                if (
+                    doc_sum
+                    and not self._amount_ok(price, qty, amount)
+                    and abs((sum_total - amount + current_expected) - doc_sum) <= 0.10
+                ):
+                    old = amount
+                    it.amount = current_expected
+                    self._flag(it, "amountfix-docsum")
+                    self._record(inv, it, "SUMBPDV", old, it.amount, "current price fixes document sum")
                     continue
 
                 deviation = self._price_deviation(price, ref)
