@@ -9,6 +9,7 @@ from exporters.dbf_exporter import DBFExporter
 from exporters.correction_exporter import CorrectionExporter
 from validators.invoice_validator import InvoiceValidator
 from validators.price_index import PriceIndex
+from document_builder import DocumentBuilder
 
 
 class Processor:
@@ -20,6 +21,7 @@ class Processor:
         self.price_history = PriceHistory(Path("data") / "price_history.xlsx")
         self.ocr = OCRReader(settings)
         self.parser = CocaColaParser()
+        self.document_builder = DocumentBuilder()
 
     def files(self):
         folder = Path(self.settings.input_dir)
@@ -45,17 +47,27 @@ class Processor:
         for f in self.files():
             self.log(f"Обробка: {f.name}")
             pages = self.ocr.read_file(f)
+
+            own_pages = []
             for pg in pages:
                 text_upper = str(pg["text"] or "").upper()
                 if "ОВАЦІЯ" not in text_upper:
                     self.log(f"  стор. {pg['page']}: чужий документ або не наша фірма, пропущено")
                     continue
+                own_pages.append(pg)
 
-                inv = self.parser.parse(f.name, pg["page"], pg["text"])
-                shop, shop_method = self.shops.find(inv.address or pg["text"])
+            documents = self.document_builder.build(f.name, own_pages)
+            for doc_text in documents:
+                inv = self.parser.parse(f.name, doc_text.page, doc_text.text)
+                # Для діагностики зберігаємо реальний діапазон сторінок у полі page.
+                # Експортери здебільшого пишуть це як текст, тому "20-21" корисніше за "20".
+                if len(doc_text.pages) > 1:
+                    inv.page = doc_text.page_label
+
+                shop, shop_method = self.shops.find(inv.address or doc_text.text)
                 inv.shop = shop
                 if not inv.doc and not inv.items:
-                    self.log(f"  стор. {pg['page']}: порожня/не розпізнана, пропущено")
+                    self.log(f"  стор. {doc_text.page_label}: порожня/не розпізнана, пропущено")
                     continue
                 for it in inv.items:
                     pr, method = self.products.find(it.barcode, it.raw_name)
@@ -64,7 +76,10 @@ class Processor:
                         method = self._add_match_flags(method, it.parse_warning)
                     it.match_method = method
                 invoices.append(inv)
-                self.log(f"  стор. {pg['page']}: DOC={inv.doc}; SHOP={(shop.code if shop else '')}; рядків={len(inv.items)}")
+                extra = ""
+                if len(doc_text.pages) > 1:
+                    extra = " (об'єднано сторінки)"
+                self.log(f"  стор. {doc_text.page_label}: DOC={inv.doc}; SHOP={(shop.code if shop else '')}; рядків={len(inv.items)}{extra}")
         price_index = PriceIndex(invoices, self.price_history)
         self.log(f"Підтверджених цін пакета: {len(price_index.package_prices)}")
         InvoiceValidator(price_index=price_index).validate(invoices, self._add_match_flags)
