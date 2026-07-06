@@ -6,9 +6,9 @@ from utils.text import to_float
 class CocaColaParser:
     PRODUCT_RE = re.compile(
         r"(?i)(?:"
-        r"\d+[\.,]?\d*\s*(?:PET|РЕТ|ПЕТ|CAN|САМ)\s*[XХ]\s*\d+|"
-        r"\d+[\.,]?\d*(?:PET|РЕТ|ПЕТ|CAN|САМ)[XХ]\d+|"
-        r"(?:PET|РЕТ|ПЕТ|CAN|САМ)\s*[XХ]\s*\d+"
+        r"\d+[\.,]?\d*\s*(?:PET|РЕТ|ПЕТ|CAN|САМ)\s*[XХ]\s*[ЄЕE]?\s*\d+|"
+        r"\d+[\.,]?\d*(?:PET|РЕТ|ПЕТ|CAN|САМ)[XХ]\s*[ЄЕE]?\s*\d+|"
+        r"(?:PET|РЕТ|ПЕТ|CAN|САМ)\s*[XХ]\s*[ЄЕE]?\s*\d+"
         r")"
     )
 
