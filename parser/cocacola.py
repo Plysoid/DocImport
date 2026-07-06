@@ -4,14 +4,14 @@ from utils.text import to_float
 
 
 class CocaColaParser:
+    PACKAGE_TYPES = r"(?:PET|РЕТ|ПЕТ|CAN|САМ|BRK|БРК)"
     PRODUCT_RE = re.compile(
-        r"(?i)(?:"
-        r"\d+[\.,]?\d*\s*(?:PET|РЕТ|ПЕТ|CAN|САМ)\s*[XХ]\s*[ЄЕE]?\s*\d+|"
-        r"\d+[\.,]?\d*(?:PET|РЕТ|ПЕТ|CAN|САМ)[XХ]\s*[ЄЕE]?\s*\d+|"
-        r"(?:PET|РЕТ|ПЕТ|CAN|САМ)\s*[XХ]\s*[ЄЕE]?\s*\d+"
-        r")"
+        rf"(?i)(?:"
+        rf"\d+[\.,]?\d*\s*{PACKAGE_TYPES}\s*[XХ]\s*[ЄЕE]?\s*\d+|"
+        rf"\d+[\.,]?\d*{PACKAGE_TYPES}[XХ]\s*[ЄЕE]?\s*\d+|"
+        rf"{PACKAGE_TYPES}\s*[XХ]\s*[ЄЕE]?\s*\d+"
+        rf")"
     )
-
 
     def parse(self, source_file: str, page: int, text: str) -> Invoice:
         inv = Invoice(source_file=source_file, page=page, raw_text=text)
