@@ -328,6 +328,17 @@ class InvoiceValidator:
                         changed = True
                         break
 
+                    # 1B. Якщо price*qty дає суму, яка закриває підсумок документа,
+                    # виправляємо SUM, а не QTY. Це захист від OCR-випадку:
+                    # 161,88 | 2 | 323476 -> SUM має бути 323,76, а не QTY=20.
+                    if doc_sum and abs((sum_total - amount + expected) - doc_sum) <= 0.10:
+                        old = amount
+                        it.amount = expected
+                        self._flag(it, "amountfix-docsum")
+                        self._record(inv, it, "SUMBPDV", old, it.amount, "price*qty fixes document sum")
+                        changed = True
+                        break
+
                     # 1C. Якщо кількість склеїлась і це підтверджується рядком/документом.
                     for q in self._candidate_qtys(qty):
                         if not self._amount_ok(price, q, amount):
@@ -355,9 +366,31 @@ class InvoiceValidator:
                         if not price or not qty or not amount:
                             continue
                         for q in self._candidate_qtys(qty):
+                            new_qty_total = qty_total - qty + q
+                            expected_q = round(price * q, 2)
+
+                            # Якщо OCR зіпсував суму на порядок/розділювач і через це
+                            # раніше утворилась штучна кількість (наприклад 20 замість 2),
+                            # виправляємо і QTY, і SUM тільки коли одночасно сходяться
+                            # підсумки документа по кількості та сумі.
+                            if (
+                                doc_sum
+                                and abs(new_qty_total - doc_qty) <= 0.001
+                                and abs((sum_total - amount + expected_q) - doc_sum) <= 0.10
+                            ):
+                                old_qty = qty
+                                old_amount = amount
+                                it.qty = q
+                                it.amount = expected_q
+                                self._flag(it, "qtyfix-docqty")
+                                self._flag(it, "amountfix-docsum")
+                                self._record(inv, it, "QTY", old_qty, it.qty, "document quantity total")
+                                self._record(inv, it, "SUMBPDV", old_amount, it.amount, "price*qty fixes document sum")
+                                changed = True
+                                break
+
                             if not self._amount_ok(price, q, amount):
                                 continue
-                            new_qty_total = qty_total - qty + q
                             if abs(new_qty_total - doc_qty) <= 0.001:
                                 old = qty
                                 it.qty = q
