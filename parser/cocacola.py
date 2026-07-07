@@ -5,13 +5,15 @@ from utils.text import to_float
 
 class CocaColaParser:
     PACKAGE_TYPES = r"(?:PET|РЕТ|ПЕТ|CAN|САМ|BRK|БРК)"
+
     PRODUCT_RE = re.compile(
         rf"(?i)(?:"
-        rf"\d+[\.,]?\d*\s*{PACKAGE_TYPES}\s*[XХ]\s*[ЄЕE]?\s*\d+|"
-        rf"\d+[\.,]?\d*{PACKAGE_TYPES}[XХ]\s*[ЄЕE]?\s*\d+|"
-        rf"{PACKAGE_TYPES}\s*[XХ]\s*[ЄЕE]?\s*\d+"
+        rf"\d+[\.,]?\d*\s*{PACKAGE_TYPES}\s*[XХ]\s*[ЄЕEІI]?\s*\d+|"
+        rf"\d+[\.,]?\d*{PACKAGE_TYPES}[XХ]\s*[ЄЕEІI]?\s*\d+|"
+        rf"{PACKAGE_TYPES}\s*[XХ]\s*[ЄЕEІI]?\s*\d+"
         rf")"
     )
+
 
     def parse(self, source_file: str, page: int, text: str) -> Invoice:
         inv = Invoice(source_file=source_file, page=page, raw_text=text)
@@ -183,11 +185,30 @@ class CocaColaParser:
                 items.append(item)
         return items
 
+    def _normalize_ocr_packaging(self, s):
+        """Нормалізує OCR-помилки у маркері упаковки перед PRODUCT_RE.
+
+        Приклади:
+        - БООРЕТХІ12 -> 500 PET X12
+        - 500PETX12 -> 500 PET X12
+        - 1.0 BRK X12 -> 1.0 BRK X12
+        """
+        s = str(s or "")
+        s = s.replace("Х", "X").replace("х", "X")
+        s = s.replace("РЕТ", "PET").replace("ПЕТ", "PET")
+        s = s.replace("САМ", "CAN")
+        s = re.sub(r"\b[БB]ОО\s*PET", "500 PET", s, flags=re.I)
+        s = re.sub(r"\b[БB]ООPET", "500 PET", s, flags=re.I)
+        s = re.sub(r"\b500PET", "500 PET", s, flags=re.I)
+        s = re.sub(r"\b(\d+(?:[\.,]\d+)?)\s*(PET|CAN|BRK)\s*X\s*[ІIЄЕE]?\s*(\d+)", r"\1 \2 X\3", s, flags=re.I)
+        s = re.sub(r"\b(PET|CAN|BRK)\s*X\s*[ІIЄЕE]?\s*(\d+)", r"\1 X\2", s, flags=re.I)
+        return s
+
     def _parse_record(self, rec):
         clean = re.sub(r"\s+", " ", rec.replace("|", " ")).strip()
         # OCR часто дає кириличну Х у X6 / X12. Для пошуку шаблону це не проблема,
         # але далі корисно мати однаковий текст.
-        clean = clean.replace("Х", "X")
+        clean = self._normalize_ocr_packaging(clean)
         clean = clean.replace("'", " ").replace("`", " ").replace("’", " ")
         m_code = re.match(r"^(\d{4,8})\b(.*)$", clean)
         if not m_code:

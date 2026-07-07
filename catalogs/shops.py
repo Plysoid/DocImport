@@ -7,7 +7,7 @@ from utils.text import norm
 
 
 BAD_LINE_MARKERS = (
-    "КОКА", "БЕВЕР", "IBAN", "IВАМ", "ІВАМ", "ЇВАМ", "ЄДРПОУ", "БАНК",
+    "КОКА", "БЕВЕР", "IBAN", "IВАМ", "ІВАМ", "ЇВАМ", "ЄДРПОУ",
     "ПОСТАВКА", "НАКЛАДНА", "ЗАВАНТАЖЕН", "ЦЕНТР", "ВОДІЙ",
     "УВАГА", "ТЕЛЕФОНУЙТЕ", "РЕКВІЗИТ", "СІТІБАНК", "СИТIБАНК",
     "АКТ РОЗБІЖ", "ПІДПИС", "ВАНТАЖ ОТРИМАВ", "ПОДАТКОВА",
@@ -76,7 +76,8 @@ class ShopCatalog:
         ws = wb.active
         rows = ws.iter_rows(values_only=True)
         try:
-            header = [str(x or "").strip().upper() for x in next(rows)]
+            first = next(rows)
+            header = [str(x or "").strip().upper() for x in first]
         except StopIteration:
             wb.close(); return
 
@@ -87,11 +88,17 @@ class ShopCatalog:
             return None
 
         c_code = idx("КОД", "SHOP", "КОД МАГАЗИНУ")
-        c_addr = idx("АДРЕСАНАКЛ", "АДРЕСА НАКЛ", "ADDRESSNAKL")
-        if c_code is None or c_addr is None:
-            wb.close(); return
+        c_addr = idx("АДРЕСАНАКЛ", "АДРЕСА НАКЛ", "ADDRESSNAKL", "АДРЕСА")
 
-        for r in rows:
+        # Підтримка АдресиКор.xlsx без шапки: код у першій колонці, адреса у другій.
+        data_rows = rows
+        if c_code is None or c_addr is None:
+            c_code, c_addr = 0, 1
+            data_rows = iter([first] + list(rows))
+
+        for r in data_rows:
+            if len(r) <= max(c_code, c_addr):
+                continue
             code = str(r[c_code] or "").strip()
             addr = str(r[c_addr] or "").strip()
             if not code or not addr:
@@ -112,6 +119,20 @@ class ShopCatalog:
             "79000", "79005", "79040", "79052", "79060", "79066",
         }
         return [x for x in norm(s).split() if len(x) >= 2 and x not in skip]
+
+    def _address_numbers(self, s: str):
+        """Повертає номери будинків без поштових індексів.
+
+        79000 / 79040 не можна вважати номером будинку, інакше
+        В. Великого 51 може помилково збігтися з В. Великого 67
+        тільки через однаковий індекс 79000.
+        """
+        nums = []
+        for x in re.findall(r"\d+[А-ЯA-Z]?(?:/\d+)?", norm(s)):
+            if re.fullmatch(r"79\d{3}", x):
+                continue
+            nums.append(x)
+        return set(nums)
 
     def _clean_address_segment(self, s: str) -> str:
         s = str(s or "").strip()
@@ -218,8 +239,14 @@ class ShopCatalog:
             return None
         cand_norms = [norm(c) for c in candidates if norm(c)]
         for cn in cand_norms:
+            cand_nums = self._address_numbers(cn)
             for key, sh in self.corr_addresses.items():
                 if not key:
+                    continue
+                key_nums = self._address_numbers(key)
+                # Для корекцій номер будинку має збігатися точно.
+                # Інакше В. Великого 51 може помилково попасти в корекцію 67.
+                if self._house_number_ok(cand_nums, key_nums) is not True:
                     continue
                 n = len(key)
                 if cn == key or cn.startswith(key) or key in cn:
@@ -258,8 +285,8 @@ class ShopCatalog:
         if not nt or not shop_key:
             return 0
 
-        nums_shop = set(re.findall(r"\d+[А-ЯA-Z]?(?:/\d+)?", shop_key))
-        nums_cand = set(re.findall(r"\d+[А-ЯA-Z]?(?:/\d+)?", nt))
+        nums_shop = self._address_numbers(shop_key)
+        nums_cand = self._address_numbers(nt)
         num_ok = self._house_number_ok(nums_cand, nums_shop)
 
         cand_tokens = set(self._tokens(nt))
