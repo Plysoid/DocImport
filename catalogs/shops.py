@@ -6,6 +6,10 @@ from models.entities import Shop
 from utils.text import norm
 
 
+DEBUG_ADDRESS = True
+ADDRESS_DEBUG_LOG = Path("logs") / "address_debug.txt"
+
+
 BAD_LINE_MARKERS = (
     "КОКА", "БЕВЕР", "IBAN", "IВАМ", "ІВАМ", "ЇВАМ", "ЄДРПОУ",
     "ПОСТАВКА", "НАКЛАДНА", "ЗАВАНТАЖЕН", "ЦЕНТР", "ВОДІЙ",
@@ -67,7 +71,14 @@ class ShopCatalog:
             self.by_norm[key] = sh
             self._keys.append((key, sh, self._tokens(key)))
         wb.close()
+        if DEBUG_ADDRESS:
+            try:
+                ADDRESS_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+                ADDRESS_DEBUG_LOG.write_text("", encoding="utf-8")
+            except Exception:
+                pass
         self._load_corrections(p.parent / "АдресиКор.xlsx")
+        self._debug("LOADED SHOPS:", len(self.items), "CORRECTIONS:", len(self.corr_addresses))
 
     def _load_corrections(self, filename: Path):
         if not filename.exists():
@@ -114,8 +125,16 @@ class ShopCatalog:
                 for v in variants:
                     v = self._clean_address_segment(v)
                     k = norm(v)
-                    if k:
-                        self.corr_addresses[k] = sh
+                    # Не додаємо в корекції службове OCR-сміття типу "І".
+                    # Інакше майже будь-яка адреса, що містить літеру І,
+                    # може помилково збігтися з цією корекцією.
+                    if not k:
+                        continue
+                    if len(k) < 8:
+                        continue
+                    if not self._address_numbers(k):
+                        continue
+                    self.corr_addresses[k] = sh
         wb.close()
 
     def _shop_by_code(self, code):
@@ -126,21 +145,24 @@ class ShopCatalog:
         skip = {
             "М", "МІСТО", "ЛЬВIВ", "ЛЬВІВ", "ЛЬВОВ", "ВУЛ", "ВУЛИЦЯ",
             "ПР", "ПР.", "ПРОСП", "ПРОСПЕКТ", "БУЛ", "БУЛЬВАР", "И", "І", "I",
-            "ТАРАСА",
+            "ТАРАСА", "СТЕПАНА",
             "79000", "79005", "79040", "79052", "79060", "79066",
         }
-        return [x for x in norm(s).split() if len(x) >= 2 and x not in skip and not re.fullmatch(r"\d{5}", x)]
+        return [x for x in norm(s).split() if len(x) >= 2 and x not in skip and not re.fullmatch(r"\d{5,}", x)]
 
     def _address_numbers(self, s: str):
-        """Повертає номери будинків без поштових індексів.
+        """Повертає номери будинків без індексів і телефонів.
 
-        79000 / 79040 не можна вважати номером будинку, інакше
-        В. Великого 51 може помилково збігтися з В. Великого 67
-        тільки через однаковий індекс 79000.
+        5+ цифр не вважаємо номером будинку. Також виправляємо
+        типовий OCR-випадок у номері: 5ЗА -> 53А.
         """
+        text = norm(s)
+        # OCR: кирилична З у номері будинку часто означає цифру 3.
+        text = re.sub(r"(?<=\d)З(?=[А-ЯA-Z]?\b)", "3", text)
+
         nums = []
-        for x in re.findall(r"\d+[А-ЯA-Z]?(?:/\d+)?", norm(s)):
-            if re.fullmatch(r"\d{5}", x):
+        for x in re.findall(r"\d+[А-ЯA-Z]?(?:/\d+)?", text):
+            if re.fullmatch(r"\d{5,}", x):
                 continue
             nums.append(x)
         return set(nums)
@@ -233,8 +255,9 @@ class ShopCatalog:
 
         # Додатково: якщо парсер уже передав коротку адресу, залишаємо її кандидатом.
         if text and len(str(text)) < 220:
-            add(str(text))
-
+            s = self._clean_address_segment(str(text))
+            if s and HOUSE_RE.search(s):
+                candidates.append(s)
         # Унікальні по norm, зберігаючи порядок.
         seen = set()
         out = []
@@ -335,11 +358,40 @@ class ShopCatalog:
             return ratio if num_ok is True else min(ratio, 88)
         return 0
 
+    def _debug(self, *parts):
+        if not DEBUG_ADDRESS:
+            return
+        try:
+            ADDRESS_DEBUG_LOG.parent.mkdir(parents=True, exist_ok=True)
+            with ADDRESS_DEBUG_LOG.open("a", encoding="utf-8") as f:
+                f.write(" ".join(str(x) for x in parts) + "\n")
+        except Exception:
+            pass
+
+    def _debug_address_state(self, text, candidates, corr=None, best=None):
+        if not DEBUG_ADDRESS:
+            return
+        self._debug("\n" + "=" * 80)
+        self._debug("ADDR INPUT:", str(text or "")[:500].replace("\n", " | "))
+        self._debug("ADDR CANDIDATES:")
+        for c in candidates:
+            self._debug("  -", c, "=>", norm(c), "nums=", sorted(self._address_numbers(c)))
+        self._debug("ADDR CORR KEYS COUNT:", len(self.corr_addresses))
+        keys497 = [k for k, v in self.corr_addresses.items() if getattr(v, "code", "") == "497"]
+        self._debug("HAS 497 CORR:", keys497)
+        if corr:
+            self._debug("CORR MATCH:", getattr(corr, "code", ""), getattr(corr, "address", ""))
+        if best and best[0] is not None:
+            self._debug("BEST FUZZY:", getattr(best[0], "code", ""), getattr(best[0], "address", ""), best[1], best[2])
+        elif best:
+            self._debug("BEST FUZZY:", best)
+
     def find(self, text: str):
         candidates = self._candidate_addresses(text)
 
         corr = self._best_corr_address(candidates)
         if corr:
+            self._debug_address_state(text, candidates, corr=corr)
             return corr, "addr-corr"
 
         best = (None, "not-found", 0)
@@ -349,6 +401,7 @@ class ShopCatalog:
                 if score > best[2]:
                     best = (sh, f"addr:{score:.0f}", score)
 
+        self._debug_address_state(text, candidates, best=best)
         if best[0] is not None and best[2] >= 86:
             return best[0], best[1]
         return None, "not-found"
