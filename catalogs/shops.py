@@ -105,7 +105,17 @@ class ShopCatalog:
                 continue
             sh = self._shop_by_code(code)
             if sh:
-                self.corr_addresses[norm(addr)] = sh
+                # АдресиКор може містити кілька варіантів через |:
+                # повний рядок з індексом і короткий рядок без міста.
+                # Зберігаємо всі варіанти, щоб збіг спрацював і по
+                # "81652, НОВИЙ РОЗДІЛ ...", і по "ТАРАСА ШЕВЧЕНКА 16".
+                variants = [addr]
+                variants.extend(str(addr).split("|"))
+                for v in variants:
+                    v = self._clean_address_segment(v)
+                    k = norm(v)
+                    if k:
+                        self.corr_addresses[k] = sh
         wb.close()
 
     def _shop_by_code(self, code):
@@ -115,10 +125,11 @@ class ShopCatalog:
     def _tokens(self, s: str):
         skip = {
             "М", "МІСТО", "ЛЬВIВ", "ЛЬВІВ", "ЛЬВОВ", "ВУЛ", "ВУЛИЦЯ",
-            "ПР", "ПРОСПЕКТ", "БУЛ", "БУЛЬВАР", "И", "І", "I",
+            "ПР", "ПР.", "ПРОСП", "ПРОСПЕКТ", "БУЛ", "БУЛЬВАР", "И", "І", "I",
+            "ТАРАСА",
             "79000", "79005", "79040", "79052", "79060", "79066",
         }
-        return [x for x in norm(s).split() if len(x) >= 2 and x not in skip]
+        return [x for x in norm(s).split() if len(x) >= 2 and x not in skip and not re.fullmatch(r"\d{5}", x)]
 
     def _address_numbers(self, s: str):
         """Повертає номери будинків без поштових індексів.
@@ -129,7 +140,7 @@ class ShopCatalog:
         """
         nums = []
         for x in re.findall(r"\d+[А-ЯA-Z]?(?:/\d+)?", norm(s)):
-            if re.fullmatch(r"79\d{3}", x):
+            if re.fullmatch(r"\d{5}", x):
                 continue
             nums.append(x)
         return set(nums)
@@ -249,9 +260,13 @@ class ShopCatalog:
                 if self._house_number_ok(cand_nums, key_nums) is not True:
                     continue
                 n = len(key)
-                if cn == key or cn.startswith(key) or key in cn:
+                if cn == key or cn.startswith(key) or key.startswith(cn) or key in cn or cn in key:
                     return sh
-                # Порівнюємо тільки фрагменти такої ж довжини, як АдресаНакл.
+                # Порівнюємо фрагменти такої ж довжини, як АдресаНакл.
+                # Для коротких кандидатів також порівнюємо token_set_ratio:
+                # "ТАРАСА ШЕВЧЕНКА 16" має збігатися з короткою корекцією.
+                if fuzz.token_set_ratio(cn, key) >= 92:
+                    return sh
                 for i in range(0, max(1, len(cn) - n + 1)):
                     frag = cn[i:i+n]
                     if frag == key or fuzz.ratio(frag, key) >= 92:
